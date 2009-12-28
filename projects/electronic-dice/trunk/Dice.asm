@@ -45,7 +45,17 @@
                 ifdef   __DEBUG
  __config _MCLRE_OFF & _CP_OFF & _WDT_OFF & _IntRC_OSC
                 else
- __config _MCLRE_OFF & _CP_ON & _WDT_OOFF & _IntRC_OSC
+ __config _MCLRE_OFF & _CP_ON & _WDT_OFF & _IntRC_OSC
+                endif
+                endif
+
+                ifdef   __12F509
+                include P12F509.inc
+
+                ifdef   __DEBUG
+ __config _MCLRE_OFF & _CP_OFF & _WDT_OFF & _IntRC_OSC
+                else
+ __config _MCLRE_OFF & _CP_ON & _WDT_OFF & _IntRC_OSC
                 endif
                 endif
 
@@ -74,12 +84,12 @@ TMR0_PERIOD     equ     FOSC / (TMR0_HZ * TMR0_PRESCALE)
 
 SWITCH          equ     .3
 
-LED_A           equ     .0
-LED_B           equ     .1
-LED_C           equ     .2
-LED_D           equ     .4
+LED_A           equ     .5
+LED_B           equ     .4
+LED_C           equ     .1
+LED_D           equ     .0
 
-POWEROFF_PERIOD equ     .60 * TMR0_HZ
+POWEROFF_PERIOD equ     .15 * TMR0_HZ
 
 ;===============================================================================
 ; Data Areas
@@ -97,15 +107,15 @@ COUNTL          res     .1
 COUNTH          res     .1
 
 ;===============================================================================
+; Reset Vector
 ;-------------------------------------------------------------------------------
 
                 code	h'000'
 
-                btfss   STATUS,NOT_PD           ; Is this a power on reset?
-                goto    WaitForRelease          ; No, its a wake up
-                goto	PowerOnReset		; Yes, do full initialisation
+                goto	PowerOnReset		; Jump to initialisation
 
 ;===============================================================================
+; Subroutines
 ;-------------------------------------------------------------------------------
 
 ; Convert the dice value (0 to 5) in WREG into the bit pattern needed to light
@@ -120,40 +130,46 @@ GetDicePattern:
                 retlw   BIT(LED_A)|BIT(LED_B)|BIT(LED_C)
                 retlw   BIT(LED_B)|BIT(LED_C)|BIT(LED_D)
 
-; Delay for WREG ticks but keep changing the dice value during this time to
-; randomise it.
+; Increments the dice value by one and wraps size back to zero.
 
-TickDelay:
-                movwf   TICKS
-ResetTimer:
-                movlw   low -TMR0_PERIOD
-                movwf   TMR0
-Spinning:
+SpinDice
                 incf    DICE,W                  ; Bump dice value by one
                 xorlw   .6                      ; Too big?		
                 btfss   STATUS,Z
                 xorlw   .6                      ; No, undo comparison
                 movwf   DICE                    ; And save result
-
-                movf    TMR0,W                  ; Has the timer reached zero?
-                btfss   STATUS,Z
-                goto    Spinning                ; No, wait some more
-
-                decfsz  TICKS,F                 ; End of the delay?
-                goto    ResetTimer              ; No.
- 
                 retlw   .0
 
+; Displays the LED pattern indicated by WREG and then delays for a short time. 
 
 ShowLedPatternShort:
                 movwf   GPIO
                 movlw   .10
                 goto    TickDelay
 
+; Displays the LED pattern indicated by WREG and then delays for a longer time.
+ 
 ShowLedPatternLong:
                 movwf   GPIO
                 movlw   .30
                 goto    TickDelay
+
+; Generates a delay based on WREG timer overflows.
+
+TickDelay:
+                movwf   TICKS
+ResetTimer:
+                movlw   low -TMR0_PERIOD
+                movwf   TMR0
+DelayWait:
+                movf    TMR0,W                  ; Has the timer reached zero?
+                btfss   STATUS,Z
+                goto    DelayWait               ; No, wait some more
+
+                decfsz  TICKS,F                 ; End of the delay?
+                goto    ResetTimer              ; No.
+                retlw   .0                      ; Yes.
+
 
 ;==============================================================================
 ;------------------------------------------------------------------------------
@@ -176,10 +192,15 @@ PowerOnReset:
                 clrf    DICE
 
 WaitForRelease:
-                movlw   .1                      ; Wait for one tick period
-                call    TickDelay
+                movlw   low -TMR0_PERIOD        ; Prime the timer with debounce
+                movwf   TMR0                    ; period
+DebounceRelease:
+                call    SpinDice
                 btfss   GPIO,SWITCH             ; Is the switch released
                 goto    WaitForRelease          ; No. wait some more
+                movf    TMR0,W                  ; Completed debounce?
+                btfss   STATUS,Z
+                goto    DebounceRelease         ; No, wait some more
 
                 movlw   BIT(LED_A)|BIT(LED_B)
                 call    ShowLedPatternShort
@@ -229,12 +250,21 @@ WaitForPress:
 
                 movlw   .1                      ; Wait one tick period
                 call    TickDelay
-                decfsz  COUNTL,F                ; Reduce power off counter
-                goto    WaitForPress
-                decfsz  COUNTH,F
+
+                movf    COUNTL,W                ; Reduce power off counter
+                btfsc   STATUS,Z
+                decf    COUNTH,F
+                decf    COUNTL,F                
+
+                movf    COUNTL,W                ; Reached zero?
+                iorwf   COUNTH,W
+                btfss   STATUS,Z
                 goto    WaitForPress
                 
+                clrf    GPIO                    ; All LEDs off
+                movf    GPIO,W                  ; Read GPIO state then ...
                 sleep                           ; Sleep to save power
+                nop
 
 DebouncePress:
                 movlw   .1                      ; Wait one tick period
