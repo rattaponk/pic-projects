@@ -70,41 +70,51 @@
 ; Hardware Configuration
 ;-------------------------------------------------------------------------------
 		
-OSC             equ     .4000000
+OSC             equ     .4000000        ; The internal oscillator frequency
 FOSC            equ     OSC / .4
 
 ;-------------------------------------------------------------------------------
 
-TMR0_HZ         equ     .100
-TMR0_PRESCALE   equ     .128
+TMR0_HZ         equ     .100            ; The required timer rollover frequency
+TMR0_PRESCALE   equ     .128            ; The prescaler setting
 
 TMR0_PERIOD     equ     FOSC / (TMR0_HZ * TMR0_PRESCALE) 
 
+POWEROFF_PERIOD equ     .15 * TMR0_HZ   ; The auto-power off period
+
 ;------------------------------------------------------------------------------
 
-SWITCH          equ     .3
+SWITCH          equ     .3              ; The switch is connected to GP3
 
-LED_A           equ     .5
+LED_A           equ     .5              ; The output pins connected to the LEDs
 LED_B           equ     .4
 LED_C           equ     .1
 LED_D           equ     .0
-
-POWEROFF_PERIOD equ     .15 * TMR0_HZ
 
 ;===============================================================================
 ; Data Areas
 ;-------------------------------------------------------------------------------
 
-                udata
+; The 12F508 only has a single bank of data memory so SFRs and users registers
+; will always be accessable at the same time without need for bank switching.
+;
+; The 12F509 has two banks of data memory but a small region between h'07' and 
+; h'0f' is a shared across across both banks. By using 'udata_shr' rather than
+; 'udata' we can force the linker to put the variables there. 
+
+                ifdef   __12F509
+                udata_shr               ; Use udata_shr on 12F509
+                else
+                udata                   ; And udata on 12F508
+                endif
 
 DICE            res     .1              ; The current dice value (0 - 5)
+LEDS            res     .1              ; Hold the rolled dice LED pattern
 
-LEDS            res     .1
+TICKS           res     .1              ; A counter used for short delays 
 
-TICKS           res     .1              ; A counter 
-
-COUNTL          res     .1
-COUNTH          res     .1
+COUNTL          res     .1              ; A 16-bit counter used to detect
+COUNTH          res     .1              ; .. auto-power off
 
 ;===============================================================================
 ; Reset Vector
@@ -117,12 +127,15 @@ COUNTH          res     .1
 ;===============================================================================
 ; Subroutines
 ;-------------------------------------------------------------------------------
+; On base line micro-controllers subroutines must be located in the first half
+; of the program memory page. 
+;-------------------------------------------------------------------------------
 
 ; Convert the dice value (0 to 5) in WREG into the bit pattern needed to light
 ; the corresponding LEDs.
 
 GetDicePattern:
-                addwf	PCL,F
+                addwf	PCL,F                   ; Perform a computed jump
                 retlw   BIT(LED_A)
                 retlw   BIT(LED_B)
                 retlw   BIT(LED_A)|BIT(LED_C)
@@ -130,7 +143,7 @@ GetDicePattern:
                 retlw   BIT(LED_A)|BIT(LED_B)|BIT(LED_C)
                 retlw   BIT(LED_B)|BIT(LED_C)|BIT(LED_D)
 
-; Increments the dice value by one and wraps size back to zero.
+; Increments the dice value (0 thru 5) by one and wraps six back to zero.
 
 SpinDice
                 incf    DICE,W                  ; Bump dice value by one
@@ -143,53 +156,50 @@ SpinDice
 ; Displays the LED pattern indicated by WREG and then delays for a short time. 
 
 ShowLedPatternShort:
-                movwf   GPIO
-                movlw   .10
+                movwf   GPIO                    ; Set the LED pattern
+                movlw   .10                     ; Then delay 0.1 secs
                 goto    TickDelay
 
 ; Displays the LED pattern indicated by WREG and then delays for a longer time.
  
 ShowLedPatternLong:
-                movwf   GPIO
-                movlw   .30
-                goto    TickDelay
+                movwf   GPIO                    ; Set the LED pattern
+                movlw   .30                     ; Then delay 0.3 secs
 
 ; Generates a delay based on WREG timer overflows.
 
 TickDelay:
-                movwf   TICKS
+                movwf   TICKS                   ; Save the rollover count
 ResetTimer:
-                movlw   low -TMR0_PERIOD
+                movlw   low -TMR0_PERIOD        ; Set the timer for one period 
                 movwf   TMR0
 DelayWait:
                 movf    TMR0,W                  ; Has the timer reached zero?
                 btfss   STATUS,Z
                 goto    DelayWait               ; No, wait some more
 
-                decfsz  TICKS,F                 ; End of the delay?
-                goto    ResetTimer              ; No.
-                retlw   .0                      ; Yes.
-
+                decfsz  TICKS,F                 ; Decrement the counter and
+                goto    ResetTimer              ; .. wait again if not zero
+                retlw   .0                      ; Otherwise all done
 
 ;==============================================================================
+; Power On Reset
 ;------------------------------------------------------------------------------
 
 PowerOnReset:
                 movlw	b'00000110'
 ;                         0-------              ; Enable Wakeup on GPIO change
-;			  -0------              ; Enable Weak pullups
-;			  --0-----              ; Timer0 uses internal clock
-;			  ---x----              ; Timer0 src edge (don't care)
-;			  ----0---              ; Prescaler assigned to timer0
-;			  -----110              ; /128
+;                         -0------              ; Enable Weak pullups
+;                         --0-----              ; Timer0 uses internal clock
+;                         ---x----              ; Timer0 src edge (don't care)
+;                         ----0---              ; Prescaler assigned to timer0
+;                         -----110              ; /128 prescaler
                 option                          ; Set option bits
 
                 movlw	BIT(SWITCH)             ; Make all LED pins outputs
                 tris	GPIO
                 clrf	GPIO                    ; And switch them off
-
-                banksel DICE
-                clrf    DICE
+                clrf    DICE                    ; Reset the dice value
 
 WaitForRelease:
                 movlw   low -TMR0_PERIOD        ; Prime the timer with debounce
@@ -202,7 +212,7 @@ DebounceRelease:
                 btfss   STATUS,Z
                 goto    DebounceRelease         ; No, wait some more
 
-                movlw   BIT(LED_A)|BIT(LED_B)
+                movlw   BIT(LED_A)|BIT(LED_B)   ; Display a 'spinning' pattern
                 call    ShowLedPatternShort
                 movlw   BIT(LED_A)|BIT(LED_D)
                 call    ShowLedPatternShort
@@ -224,22 +234,22 @@ DebounceRelease:
                 call    GetDicePattern          ; Convert to LED bit pattern
                 movwf   LEDS
 
-                clrw
-                call    ShowLedPatternLong
+                clrw                            ; Then flash the dice patten
+                call    ShowLedPatternLong      ; once ..
                 movf    LEDS,W
                 call    ShowLedPatternLong
 
                 clrw
+                call    ShowLedPatternLong      ; ..twice ..
+                movf    LEDS,W
+                call    ShowLedPatternLong
+
+                clrw                            ; .. thrice ..
                 call    ShowLedPatternLong
                 movf    LEDS,W
                 call    ShowLedPatternLong
 
-                clrw
-                call    ShowLedPatternLong
-                movf    LEDS,W
-                call    ShowLedPatternLong
-
-                movlw   low POWEROFF_PERIOD
+                movlw   low POWEROFF_PERIOD     ; Load the auto-power off count
                 movwf   COUNTL
                 movlw   high POWEROFF_PERIOD
                 movwf   COUNTH
@@ -256,7 +266,7 @@ WaitForPress:
                 decf    COUNTH,F
                 decf    COUNTL,F                
 
-                movf    COUNTL,W                ; Reached zero?
+                movf    COUNTL,W                ; Has it reached zero?
                 iorwf   COUNTH,W
                 btfss   STATUS,Z
                 goto    WaitForPress
