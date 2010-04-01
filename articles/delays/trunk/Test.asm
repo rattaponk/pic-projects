@@ -36,7 +36,7 @@
                 include Delay.inc
                 
 ;===============================================================================
-;
+; Hardware Configuration
 ;-------------------------------------------------------------------------------
 
 OSC             equ     .10000000               ; 10Mhz Crystal
@@ -45,12 +45,17 @@ PLL             equ     .4                      ; PLL Multiplier
 FOSC            equ     OSC * PLL               ; Combined clock rate
 
 ;===============================================================================
-;
+; Example Code
 ;-------------------------------------------------------------------------------
 
 .ResetVector    code    h'0000'
 
-                DELAY   .100
+                DELAY   .100                    ; Generate a 100uS delay
+
+                clrwdt
+
+                DELAY   .5                      ; Generate a 5uS delay
+
                 bra     $
 
                 end
