@@ -102,5 +102,3 @@ cycles          -=      .1
 
                 list
                 endm
-
-
