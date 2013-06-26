@@ -1,8 +1,36 @@
 ;===============================================================================
 ; Vetinari Clock
 ;-------------------------------------------------------------------------------
-
-
+; Copyright (C)2013 PIC-Projects.net
+; All rights reserved.
+;
+; Redistribution and use in source and binary forms, with or without
+; modification, are permitted provided that the following conditions
+; are met:
+;
+; 1. Redistributions of source code must retain the above copyright
+;    notice, this list of conditions and the following disclaimer.
+; 2. Redistributions in binary form must reproduce the above copyright
+;    notice, this list of conditions and the following disclaimer in the
+;    documentation and/or other materials provided with the distribution.
+;
+; THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ''AS IS'' AND
+; ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+; IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+; ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+; FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+; DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+; OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+; HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+; LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+; OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+; SUCH DAMAGE.
+;===============================================================================
+; Revision History:
+;
+; 2013-06-24 Initial version
+;-------------------------------------------------------------------------------
+; $Id$
 ;===============================================================================
 
                 include P12F683.inc
@@ -19,28 +47,40 @@
 ; Hardware Configuration
 ;-------------------------------------------------------------------------------
 
+; CPU
+
 OSC             equ     .4000000        ; Use built in oscilator
+
+; I/O Pin Configuration
 
 MAGL_PIN        equ     .1
 MAGR_PIN        equ     .2
 
+TRISIO_INIT     equ     ~(M(MAGR_PIN)|M(MAGL_PIN))
+
+; Charge time for electro-magnet coil
+
 CHARGE_MS       equ     .50
+
+; Timer 0 Configuration (1kHz)
 
 TMR0_HZ         equ     .1000
 TMR0_PRESCALE   equ     .32
 
 TMR0_PERIOD     equ     OSC / (.4 * TMR0_HZ * TMR0_PRESCALE)
 
+; Timer 1 Configuration (32.768kHz)
+
 TMR1_HZ         equ     .32768
 TMR1_PRESCALE   equ     .4
 
 TICKS_PER_SEC   equ     TMR1_HZ / TMR1_PRESCALE
 
+; Time period for normal, short and long ticks
+
 TICKS_NORM      equ     TICKS_PER_SEC
 TICKS_SHORT     equ     .1 * TICKS_NORM / .2
 TICKS_LONG      equ     .3 * TICKS_NORM / .2
-
-TRISIO_INIT     equ     ~(M(MAGR_PIN)|M(MAGL_PIN))
 
 ;===============================================================================
 ; Device Configuration
@@ -67,7 +107,7 @@ COUNT           res     .1                      ; MS Delay counter
 
 .Interrupt      code    h'004'
 
-                retfie
+                retfie                          ; Never actually called
 
 ;===============================================================================
 ; Power On Reset
@@ -76,14 +116,14 @@ COUNT           res     .1                      ; MS Delay counter
 .ResetVector    code    h'000'
 
                 clrf    STATUS
-                pagesel PowerOnReset
+                pagesel PowerOnReset    ; Jump to main initialisation
                 goto    PowerOnReset
 
 ;-------------------------------------------------------------------------------
 
                 code
 PowerOnReset:
-                banksel OPTION_REG
+                banksel OPTION_REG      ; Configure option register
                 movlw   b'10000100'
 ;                         1-------              GPIO pull-ups disabled
 ;                         -x------              Interrupt edge select 
@@ -118,7 +158,7 @@ PowerOnReset:
 ;                         -------0              Timer disabled
                 movwf   T1CON
 
-                clrf    TMR1L
+                clrf    TMR1L           ; Clear the timer
                 clrf    TMR1H
 
                 banksel T1CON           ; And start the timer
@@ -130,7 +170,7 @@ PowerOnReset:
 
 ;-------------------------------------------------------------------------------
 
-                movlw   h'ff'
+                movlw   h'ff'           ; Seed the LFSR
                 movwf   LFSR+.0
                 movwf   LFSR+.1
 
@@ -139,8 +179,8 @@ PowerOnReset:
 ;-------------------------------------------------------------------------------
 
 MainTask:
-                movlw   high JumpTable
-                movwf   PCLATH
+                movlw   high JumpTable  ; Jump into pattern table based on
+                movwf   PCLATH          ; .. bits from the LFSR
                 movf    LFSR+.0,W
                 andlw   h'0f'
                 addlw   low JumpTable
@@ -304,22 +344,25 @@ RightPulse:
 ; MS Delay
 ;-------------------------------------------------------------------------------
 
+; Generate a delay in milliseconds (based on the value in WREG) by iterating
+; aroung a 1mS delay generated using Timer 0.
+
 PulseDelay:
-                movlw   CHARGE_MS
-                movwf   COUNT
+                movlw   CHARGE_MS       ; Save the mS count       
+                movwf   COUNT           
 
 DelayLoop:
-                banksel TMR0
+                banksel TMR0            ; Set Timer 0 for a 1mS period
                 movlw   LO(-TMR0_PERIOD)
                 movwf   TMR0
 
-                bcf     INTCON,T0IF
-                btfss   INTCON,T0IF
+                bcf     INTCON,T0IF     ; Clear the interrupt flag
+                btfss   INTCON,T0IF     ; And wait for it to become set again
                 goto    $-1
 
-                decfsz  COUNT,F
+                decfsz  COUNT,F         ; Reduce count and repeat
                 goto    DelayLoop
-                return
+                return                  ; .. until complete
 
 ;===============================================================================
 ; Random Number Generator
