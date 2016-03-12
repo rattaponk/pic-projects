@@ -1,0 +1,1 @@
+This repository holds the latest source code for all the hardware projects and articles documented on http://www.pic-projects.net.
